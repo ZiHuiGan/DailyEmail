@@ -59,7 +59,7 @@ def send_email(weather):
     today_str = datetime.now().strftime("%Y-%m-%d")
 
     SUBJECT_PREFIX = "[DailyWeatherBot]"  # 以后有别的 bot 就换别的前缀
-    
+    city = weather['city']
     subject = f"{SUBJECT_PREFIX} 今日天气 - {city}"
 
     body_text = (
