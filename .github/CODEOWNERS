@@ -1,0 +1,5 @@
+# 改 workflow 必须你 review（防止 secrets 泄露）
+.github/workflows/*   @ZiHuiGan
+
+# 改主逻辑也让你看一眼
+lambda_function.py    @ZiHuiGan
