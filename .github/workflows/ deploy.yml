@@ -38,3 +38,12 @@ jobs:
           aws lambda update-function-code \
             --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
             --zip-file fileb://function.zip
+
+      - name: Zip news digest function
+        run: zip -r news_digest.zip news_digest_handler.py
+
+      - name: Deploy news digest to Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ secrets.NEWS_LAMBDA_FUNCTION_NAME }} \
+            --zip-file fileb://news_digest.zip
