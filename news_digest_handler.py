@@ -27,9 +27,12 @@ def fetch_newsletters(senders: list[str], lookback_hours: int) -> list[dict]:
         imap.login(smtp_user, smtp_pass)
         print("Logged in. Selecting INBOX...")
         imap.select("INBOX")
+        print("INBOX selected. Searching...")
 
+        since_date = cutoff.strftime("%d-%b-%Y")  # IMAP date format e.g. "31-Mar-2026"
         for sender in senders:
-            _, data = imap.search(None, f'(FROM "{sender}")')
+            print(f"Searching for emails from {sender} since {since_date}...")
+            _, data = imap.search(None, f'(FROM "{sender}" SINCE "{since_date}")')
             uids = data[0].split()
             for uid in uids:
                 _, msg_data = imap.fetch(uid, "(RFC822)")
