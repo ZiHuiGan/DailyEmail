@@ -2,6 +2,7 @@ import os
 import json
 import imaplib
 import smtplib
+import socket
 import email
 from email.message import EmailMessage
 from html.parser import HTMLParser
@@ -18,9 +19,13 @@ def fetch_newsletters(senders: list[str], lookback_hours: int) -> list[dict]:
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
 
+    socket.setdefaulttimeout(30)  # fail fast instead of hanging until Lambda timeout
     results = []
+    print("Connecting to Gmail IMAP...")
     with imaplib.IMAP4_SSL("imap.gmail.com", 993) as imap:
+        print("Connected. Logging in...")
         imap.login(smtp_user, smtp_pass)
+        print("Logged in. Selecting INBOX...")
         imap.select("INBOX")
 
         for sender in senders:
