@@ -467,19 +467,25 @@ def send_email(subject: str, body: str) -> None:
 # ---------------------------------------------------------------------------
 
 def lambda_handler(event, context) -> dict:
-    now_ny = _get_ny_now()
-    h, m = now_ny.hour, now_ny.minute
-
-    # Gate: only run at 9:30am or 5:30pm New York time.
-    # EventBridge fires at both EDT and EST UTC equivalents;
-    # this check ensures only the correct one proceeds.
-    if h == 9 and m == 30:
-        tone = "morning"
-    elif h == 17 and m == 30:
-        tone = "evening"
+    # Allow manual test invocations to bypass the time gate.
+    # Pass {"tone": "morning"} or {"tone": "evening"} in the event to force a run.
+    if event.get("tone") in ("morning", "evening"):
+        tone = event["tone"]
+        print(f"Test override: forcing {tone} run.")
     else:
-        print(f"Skipping: NY time is {h:02d}:{m:02d}.")
-        return {"statusCode": 200, "body": json.dumps({"skipped": True, "ny_time": f"{h:02d}:{m:02d}"})}
+        now_ny = _get_ny_now()
+        h, m = now_ny.hour, now_ny.minute
+
+        # Gate: only run at 9:30am or 5:30pm New York time.
+        # EventBridge fires at both EDT and EST UTC equivalents;
+        # this check ensures only the correct one proceeds.
+        if h == 9 and m == 30:
+            tone = "morning"
+        elif h == 17 and m == 30:
+            tone = "evening"
+        else:
+            print(f"Skipping: NY time is {h:02d}:{m:02d}.")
+            return {"statusCode": 200, "body": json.dumps({"skipped": True, "ny_time": f"{h:02d}:{m:02d}"})}
 
     senders = [s.strip() for s in os.environ.get("NEWSLETTER_SENDERS", "").split(",") if s.strip()]
     s3_bucket = os.getenv("NEWS_S3_BUCKET", "")
