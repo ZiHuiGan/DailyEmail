@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import imaplib
 import smtplib
@@ -131,10 +132,15 @@ def summarize_with_bedrock(newsletter_text: str, source_name: str) -> str:
 
     prompt = (
         f"You are an AI news editor. Below is the full text of an AI newsletter from '{source_name}'.\n\n"
-        f"Summarize the most important AI news items in 3-5 concise bullet points. "
-        f"Each bullet should start with '• ' and be no longer than two sentences. "
-        f"Focus only on significant AI developments, releases, or research. "
-        f"Do not include promotional content or advertisements.\n\n"
+        f"Summarize the 3-5 most important AI news items as a numbered list.\n"
+        f"Format each item exactly like this:\n"
+        f"1. **Bold headline of the news.** One sentence of extra context or significance.\n\n"
+        f"Rules:\n"
+        f"- The bold part should be a punchy headline (10 words max)\n"
+        f"- The sentence after should add context or explain why it matters\n"
+        f"- Focus only on significant AI developments, releases, or research\n"
+        f"- Skip promotional content, ads, and job postings\n"
+        f"- Return only the numbered list, no intro or conclusion\n\n"
         f"Newsletter text:\n{newsletter_text[:8000]}"
     )
 
@@ -156,13 +162,49 @@ def build_digest_subject_and_body(summaries: list[dict]) -> tuple[str, str]:
     n = len(summaries)
     subject = f"{prefix} {today} ({n} newsletter{'s' if n != 1 else ''})"
 
-    sections = []
-    for item in summaries:
-        header = f"=== {item['source_name']} | {item['date']} ==="
-        sections.append(f"{header}\n{item['summary']}")
+    # Convert **bold** markdown to <strong> HTML tags
+    def md_to_html(text: str) -> str:
+        import re
+        return re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
 
-    body = "\n\n".join(sections) if sections else "No newsletters found in this period."
-    return subject, body
+    # Build one HTML card per newsletter source
+    cards = []
+    for item in summaries:
+        # Convert numbered lines into <li> elements
+        lines = item["summary"].strip().splitlines()
+        items_html = ""
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            # Strip leading "1. ", "2. " etc then apply bold conversion
+            line = re.sub(r'^\d+\.\s*', '', line)
+            items_html += f"<li style='margin-bottom:10px'>{md_to_html(line)}</li>\n"
+
+        card = f"""
+        <div style='margin-bottom:32px; padding:20px; border-left:4px solid #4A90D9; background:#f9f9f9; border-radius:4px'>
+            <div style='font-size:13px; color:#888; margin-bottom:4px'>{item['date']}</div>
+            <div style='font-size:17px; font-weight:bold; color:#222; margin-bottom:12px'>{item['source_name']}</div>
+            <ol style='margin:0; padding-left:20px; color:#333; line-height:1.7'>
+                {items_html}
+            </ol>
+        </div>"""
+        cards.append(card)
+
+    cards_html = "\n".join(cards) if cards else "<p>No newsletters found in this period.</p>"
+
+    html_body = f"""
+    <html><body style='font-family:Arial,sans-serif; max-width:680px; margin:auto; padding:24px; color:#222'>
+        <h1 style='font-size:22px; color:#1a1a1a; border-bottom:2px solid #4A90D9; padding-bottom:8px'>
+            🗞 AI News Digest — {today}
+        </h1>
+        {cards_html}
+        <p style='font-size:12px; color:#aaa; margin-top:32px'>
+            Delivered by DailyEmail Bot • {n} source{'s' if n != 1 else ''}
+        </p>
+    </body></html>"""
+
+    return subject, html_body
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +220,8 @@ def send_digest_gmail(subject: str, body: str) -> None:
     msg["From"] = os.environ.get("FROM_EMAIL", smtp_user)
     msg["To"] = ", ".join(to_emails)
     msg["Subject"] = subject
-    msg.set_content(body)
+    msg.set_content("Your email client does not support HTML.")  # plain text fallback
+    msg.add_alternative(body, subtype="html")  # HTML version shown by all modern clients
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(smtp_user, smtp_pass)
