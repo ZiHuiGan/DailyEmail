@@ -22,46 +22,12 @@ jobs:
         run: |
           pip install awscli
 
-      - name: Zip Lambda function
-        run: |
-          zip -r function.zip lambda_function.py
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Deploy to Lambda
-        run: |
-          aws lambda update-function-code \
-            --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
-            --zip-file fileb://function.zip
-
-      - name: Zip news digest function
-        run: |
-          pip install anthropic -t news_digest_package/ -q
-          cp news_digest_handler.py news_digest_package/
-          cd news_digest_package && zip -r ../news_digest.zip . && cd ..
-
-      - name: Deploy news digest to Lambda
-        run: |
-          aws lambda update-function-code \
-            --function-name ${{ secrets.NEWS_LAMBDA_FUNCTION_NAME }} \
-            --zip-file fileb://news_digest.zip
-
-      - name: Zip weather brief function
-        run: |
-          pip install anthropic -t weather_brief_package/ -q
-          cp weather_brief_handler.py weather_brief_package/
-          cd weather_brief_package && zip -r ../weather_brief.zip . && cd ..
-
-      - name: Deploy weather brief to Lambda
-        run: |
-          aws lambda update-function-code \
-            --function-name ${{ secrets.WEATHER_LAMBDA_FUNCTION_NAME }} \
-            --zip-file fileb://weather_brief.zip
 
       - name: Zip daily brief function
         run: |
