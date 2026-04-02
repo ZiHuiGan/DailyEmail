@@ -7,6 +7,7 @@ import email
 from email.message import EmailMessage
 from html.parser import HTMLParser
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +215,13 @@ def store_processed_ids(bucket: str, key: str, ids: set[str]) -> None:
 # ---------------------------------------------------------------------------
 
 def lambda_handler(event, context) -> dict:
+    # Check if it's 2pm New York time — handles EDT (UTC-4) and EST (UTC-5) automatically.
+    # ZoneInfo("America/New_York") knows DST rules so we don't have to.
+    ny_hour = datetime.now(ZoneInfo("America/New_York")).hour
+    if ny_hour != 14:  # 14 = 2pm
+        print(f"Skipping: current New York hour is {ny_hour}, not 2pm.")
+        return {"statusCode": 200, "body": json.dumps({"skipped": True, "ny_hour": ny_hour})}
+
     senders_raw = os.environ.get("NEWSLETTER_SENDERS", "")
     senders = [s.strip() for s in senders_raw.split(",") if s.strip()]
     lookback_hours = int(os.getenv("NEWS_LOOKBACK_HOURS", "24"))
