@@ -117,22 +117,16 @@ def parse_email_text(raw_bytes: bytes) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Bedrock summarization
+# Anthropic API summarization
 # ---------------------------------------------------------------------------
 
 def summarize_with_bedrock(newsletter_text: str, source_name: str) -> str:
-    import boto3
+    import anthropic
 
-    model_id = os.getenv(
-        "BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20241022-v2:0"
-    )
-    region = os.getenv("BEDROCK_REGION", None)
+    model_id = os.getenv("ANTHROPIC_MODEL_ID", "claude-haiku-4-5-20251001")
+    api_key = os.environ["ANTHROPIC_API_KEY"]
 
-    client_kwargs = {"service_name": "bedrock-runtime"}
-    if region:
-        client_kwargs["region_name"] = region
-
-    client = boto3.client(**client_kwargs)
+    client = anthropic.Anthropic(api_key=api_key)
 
     prompt = (
         f"You are an AI news editor. Below is the full text of an AI newsletter from '{source_name}'.\n\n"
@@ -143,15 +137,12 @@ def summarize_with_bedrock(newsletter_text: str, source_name: str) -> str:
         f"Newsletter text:\n{newsletter_text[:8000]}"
     )
 
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 512,
-        "messages": [{"role": "user", "content": prompt}],
-    })
-
-    response = client.invoke_model(modelId=model_id, body=body)
-    result = json.loads(response["body"].read())
-    return result["content"][0]["text"].strip()
+    message = client.messages.create(
+        model=model_id,
+        max_tokens=512,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return message.content[0].text.strip()
 
 
 # ---------------------------------------------------------------------------
