@@ -40,7 +40,10 @@ jobs:
             --zip-file fileb://function.zip
 
       - name: Zip news digest function
-        run: zip -r news_digest.zip news_digest_handler.py
+        run: |
+          pip install anthropic -t news_digest_package/ -q
+          cp news_digest_handler.py news_digest_package/
+          cd news_digest_package && zip -r ../news_digest.zip . && cd ..
 
       - name: Deploy news digest to Lambda
         run: |
