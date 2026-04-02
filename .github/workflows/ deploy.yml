@@ -50,3 +50,27 @@ jobs:
           aws lambda update-function-code \
             --function-name ${{ secrets.NEWS_LAMBDA_FUNCTION_NAME }} \
             --zip-file fileb://news_digest.zip
+
+      - name: Zip weather brief function
+        run: |
+          pip install anthropic -t weather_brief_package/ -q
+          cp weather_brief_handler.py weather_brief_package/
+          cd weather_brief_package && zip -r ../weather_brief.zip . && cd ..
+
+      - name: Deploy weather brief to Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ secrets.WEATHER_LAMBDA_FUNCTION_NAME }} \
+            --zip-file fileb://weather_brief.zip
+
+      - name: Zip daily brief function
+        run: |
+          pip install anthropic -t daily_brief_package/ -q
+          cp daily_brief_handler.py daily_brief_package/
+          cd daily_brief_package && zip -r ../daily_brief.zip . && cd ..
+
+      - name: Deploy daily brief to Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ secrets.DAILY_BRIEF_LAMBDA_FUNCTION_NAME }} \
+            --zip-file fileb://daily_brief.zip
