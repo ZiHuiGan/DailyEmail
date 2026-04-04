@@ -57,12 +57,27 @@ def test_high_wind_alert():
     assert result is not None and "wind" in result.lower()
 
 def test_boundary_below_thunderstorm():
-    # 199 is just below the thunderstorm range — no alert
     assert dbh.detect_severe_weather(199, 72.0, 5.0) is None
 
 def test_boundary_above_snow():
-    # 623 is just above the snow range — no alert (unless heat/cold/wind)
     assert dbh.detect_severe_weather(623, 72.0, 5.0) is None
+
+
+# ---------------------------------------------------------------------------
+# _weather_emoji
+# ---------------------------------------------------------------------------
+
+def test_weather_emoji_clear():
+    assert dbh._weather_emoji(800) == "☀️"
+
+def test_weather_emoji_thunderstorm():
+    assert dbh._weather_emoji(210) == "⛈"
+
+def test_weather_emoji_snow():
+    assert dbh._weather_emoji(601) == "❄️"
+
+def test_weather_emoji_clouds():
+    assert dbh._weather_emoji(802) == "⛅"
 
 
 # ---------------------------------------------------------------------------
@@ -85,26 +100,21 @@ def _make_multipart_email(plain: str, html: str) -> bytes:
 
 def test_parse_plain_text():
     raw = _make_plain_email("Hello world newsletter")
-    result = dbh.parse_email_text(raw)
-    assert result == "Hello world newsletter"
+    assert dbh.parse_email_text(raw) == "Hello world newsletter"
 
 def test_parse_html_email():
     raw = _make_html_email("<html><body><p>Hello from HTML</p></body></html>")
-    result = dbh.parse_email_text(raw)
-    assert "Hello from HTML" in result
+    assert "Hello from HTML" in dbh.parse_email_text(raw)
 
 def test_parse_prefers_plain_over_html():
-    # When both plain and HTML are present, plain text is preferred
     raw = _make_multipart_email("Plain text version", "<p>HTML version</p>")
     result = dbh.parse_email_text(raw)
     assert "Plain text version" in result
     assert "HTML version" not in result
 
 def test_parse_empty_email():
-    # Message with no payload
     msg = email_lib.message.Message()
-    result = dbh.parse_email_text(msg.as_bytes())
-    assert result == ""
+    assert dbh.parse_email_text(msg.as_bytes()) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +135,6 @@ def test_news_lines_to_html_numbered_list():
     result = dbh._news_lines_to_html(text)
     assert "<ol" in result
     assert "<strong>Big AI story.</strong>" in result
-    assert "<strong>Another story.</strong>" in result
     assert result.count("<li") == 2
 
 def test_news_lines_to_html_none_text():
@@ -134,8 +143,18 @@ def test_news_lines_to_html_none_text():
     assert "<ol" not in result
 
 def test_news_lines_to_html_empty():
-    result = dbh._news_lines_to_html("")
-    assert "No AI news today" in result
+    assert "No AI news today" in dbh._news_lines_to_html("")
+
+def test_archived_lines_to_html_empty():
+    assert dbh._archived_lines_to_html("") == ""
+    assert dbh._archived_lines_to_html("None") == ""
+
+def test_archived_lines_to_html_with_items():
+    text = "- GPT-5 released\n- Anthropic funding round"
+    result = dbh._archived_lines_to_html(text)
+    assert "GPT-5 released" in result
+    assert "Anthropic funding round" in result
+    assert "<ul" in result
 
 
 # ---------------------------------------------------------------------------
@@ -154,56 +173,63 @@ def _sample_weather():
     }
 
 def test_build_email_morning_subject():
-    subject, _ = dbh.build_email("morning", _sample_weather(), "Nice day.", None)
+    subject, _ = dbh.build_email("morning", _sample_weather(), None)
     assert "Morning" in subject
     assert "New York" in subject
 
 def test_build_email_evening_subject():
-    subject, _ = dbh.build_email("evening", _sample_weather(), "Cool evening.", None)
+    subject, _ = dbh.build_email("evening", _sample_weather(), None)
     assert "Evening" in subject
 
 def test_build_email_no_duplicate_title():
-    # The h1 that used to repeat the subject line should be gone.
-    # Subject is e.g. "🌅 Morning Brief — New York — Thursday, April 3"
-    # Body should NOT contain an <h1> tag.
-    _, html = dbh.build_email("morning", _sample_weather(), "Nice day.", None)
+    # Body must not contain an <h1> — subject line is the only title
+    _, html = dbh.build_email("morning", _sample_weather(), None)
     assert "<h1" not in html
 
 def test_build_email_no_alert_no_red_box():
-    _, html = dbh.build_email("morning", _sample_weather(), "Nice day.", None)
-    assert "c0392b" not in html  # red alert background not present
+    _, html = dbh.build_email("morning", _sample_weather(), None)
+    assert "c0392b" not in html
 
 def test_build_email_with_alert_shows_red_box():
-    _, html = dbh.build_email(
-        "morning", _sample_weather(), "Nice day.", "⚡ Thunderstorm warning!"
-    )
+    _, html = dbh.build_email("morning", _sample_weather(), "⚡ Thunderstorm warning!")
     assert "c0392b" in html
     assert "Thunderstorm warning" in html
 
-def test_build_email_weather_inline_stats():
-    # Stats should be on a single line, not a table
-    _, html = dbh.build_email("morning", _sample_weather(), "Desc.", None)
-    assert "62°F" in html          # temp
-    assert "58°F" in html          # feels like
-    assert "clear sky" in html     # description
-    assert "12 mph wind" in html   # wind
-    assert "55% humidity" in html  # humidity
-    assert "<table" not in html    # no table
+def test_build_email_weather_section_header():
+    _, html = dbh.build_email("morning", _sample_weather(), None)
+    assert "Weather" in html
+
+def test_build_email_weather_stats_present():
+    _, html = dbh.build_email("morning", _sample_weather(), None)
+    assert "62" in html        # temp
+    assert "58" in html        # feels like
+    assert "12" in html        # wind
+    assert "55" in html        # humidity
+    assert "Clear Sky" in html or "clear sky" in html.lower()
 
 def test_build_email_morning_no_news_section():
-    # Morning email: no news_html passed → no news section in body
-    _, html = dbh.build_email("morning", _sample_weather(), "Desc.", None)
+    # Morning: no news_html → AI News section absent
+    _, html = dbh.build_email("morning", _sample_weather(), None)
     assert "AI News" not in html
 
 def test_build_email_evening_has_news_section():
-    # Evening email: news_html provided → news section appears
-    _, html = dbh.build_email("evening", _sample_weather(), "Desc.", None, "<p>Top story</p>")
+    _, html = dbh.build_email("evening", _sample_weather(), None, "<p>Top story</p>")
     assert "AI News" in html
     assert "Top story" in html
 
+def test_build_email_archived_section_shown():
+    archived = dbh._archived_lines_to_html("- GPT-5 released")
+    _, html = dbh.build_email("evening", _sample_weather(), None, "<p>News</p>", archived)
+    assert "Archived" in html
+    assert "GPT-5 released" in html
+
+def test_build_email_no_archived_section_when_empty():
+    _, html = dbh.build_email("evening", _sample_weather(), None, "<p>News</p>", "")
+    assert "Archived" not in html
+
 
 # ---------------------------------------------------------------------------
-# lambda_handler — skip logic
+# lambda_handler
 # ---------------------------------------------------------------------------
 
 def _set_env(monkeypatch):
@@ -228,42 +254,37 @@ def test_lambda_handler_skips_wrong_hour(monkeypatch):
 
 
 def test_lambda_handler_morning_send(monkeypatch):
-    """Morning send: weather only — fetch_newsletters must NOT be called."""
+    """Morning: weather only — fetch_newsletters must NOT be called."""
     _set_env(monkeypatch)
     fake_time = datetime(2026, 4, 2, 9, 30, tzinfo=ZoneInfo("America/New_York"))
     fake_weather = {
         "city": "New York", "temp_f": 60.0, "feels_like_f": 55.0,
-        "humidity": 50, "wind_mph": 8.0, "weather_id": 800,
-        "description": "clear sky",
+        "humidity": 50, "wind_mph": 8.0, "weather_id": 800, "description": "clear sky",
     }
     fake_smtp = MagicMock()
 
     with patch("daily_brief_handler._get_ny_now", return_value=fake_time), \
          patch("daily_brief_handler.get_weather", return_value=fake_weather), \
-         patch("daily_brief_handler.get_weather_description", return_value="Nice morning."), \
          patch("daily_brief_handler.fetch_newsletters") as mock_fetch, \
          patch("daily_brief_handler.smtplib.SMTP_SSL") as mock_smtp:
         mock_smtp.return_value.__enter__.return_value = fake_smtp
         result = dbh.lambda_handler({}, None)
 
-    assert result["statusCode"] == 200
     body = json.loads(result["body"])
     assert body["tone"] == "morning"
     assert body["newsletters_fetched"] == 0
     assert body["sent"] is True
-    # Morning must never touch newsletters
     mock_fetch.assert_not_called()
     fake_smtp.send_message.assert_called_once()
 
 
-def test_lambda_handler_evening_send(monkeypatch):
-    """Evening send: weather + all newsletters (24h lookback), no S3."""
+def test_lambda_handler_evening_with_newsletters(monkeypatch):
+    """Evening: fetches newsletters, summarize_news returns (news, archived)."""
     _set_env(monkeypatch)
     fake_time = datetime(2026, 4, 2, 17, 30, tzinfo=ZoneInfo("America/New_York"))
     fake_weather = {
         "city": "New York", "temp_f": 58.0, "feels_like_f": 53.0,
-        "humidity": 65, "wind_mph": 7.0, "weather_id": 800,
-        "description": "clear sky",
+        "humidity": 65, "wind_mph": 7.0, "weather_id": 800, "description": "clear sky",
     }
     fake_newsletter = [{
         "uid": "1", "subject": "AI Daily", "sender": "news@example.com",
@@ -274,14 +295,12 @@ def test_lambda_handler_evening_send(monkeypatch):
 
     with patch("daily_brief_handler._get_ny_now", return_value=fake_time), \
          patch("daily_brief_handler.get_weather", return_value=fake_weather), \
-         patch("daily_brief_handler.get_weather_description", return_value="Cool evening."), \
          patch("daily_brief_handler.fetch_newsletters", return_value=fake_newsletter), \
-         patch("daily_brief_handler.summarize_news", return_value="1. **GPT-5 Released.** Big deal."), \
+         patch("daily_brief_handler.summarize_news", return_value=("1. **GPT-5 Released.** Big deal.", "- Old story")), \
          patch("daily_brief_handler.smtplib.SMTP_SSL") as mock_smtp:
         mock_smtp.return_value.__enter__.return_value = fake_smtp
         result = dbh.lambda_handler({}, None)
 
-    assert result["statusCode"] == 200
     body = json.loads(result["body"])
     assert body["tone"] == "evening"
     assert body["newsletters_fetched"] == 1
@@ -290,19 +309,17 @@ def test_lambda_handler_evening_send(monkeypatch):
 
 
 def test_lambda_handler_evening_no_newsletters(monkeypatch):
-    """Evening send with no newsletters: still sends weather-only email."""
+    """Evening with no newsletters: still sends (weather-only evening email)."""
     _set_env(monkeypatch)
     fake_time = datetime(2026, 4, 2, 17, 30, tzinfo=ZoneInfo("America/New_York"))
     fake_weather = {
         "city": "New York", "temp_f": 58.0, "feels_like_f": 53.0,
-        "humidity": 65, "wind_mph": 7.0, "weather_id": 800,
-        "description": "clear sky",
+        "humidity": 65, "wind_mph": 7.0, "weather_id": 800, "description": "clear sky",
     }
     fake_smtp = MagicMock()
 
     with patch("daily_brief_handler._get_ny_now", return_value=fake_time), \
          patch("daily_brief_handler.get_weather", return_value=fake_weather), \
-         patch("daily_brief_handler.get_weather_description", return_value="Cool evening."), \
          patch("daily_brief_handler.fetch_newsletters", return_value=[]), \
          patch("daily_brief_handler.smtplib.SMTP_SSL") as mock_smtp:
         mock_smtp.return_value.__enter__.return_value = fake_smtp

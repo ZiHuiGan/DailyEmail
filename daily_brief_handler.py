@@ -64,25 +64,18 @@ def detect_severe_weather(weather_id: int, temp_f: float, wind_mph: float) -> st
     return None
 
 
-def get_weather_description(weather: dict) -> str:
-    """Claude writes a single-sentence 'feels like' description."""
-    import anthropic
-
-    prompt = (
-        "Write exactly 1 sentence describing what it feels like outside and what to wear. "
-        "Be warm and conversational.\n\n"
-        f"City: {weather['city']} | {weather['temp_f']:.0f}°F, feels like "
-        f"{weather['feels_like_f']:.0f}°F | {weather['description']} | "
-        f"Humidity {weather['humidity']}% | Wind {weather['wind_mph']:.0f} mph"
-    )
-
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    msg = client.messages.create(
-        model=os.getenv("ANTHROPIC_MODEL_ID", "claude-haiku-4-5-20251001"),
-        max_tokens=60,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return msg.content[0].text.strip()
+def _weather_emoji(weather_id: int) -> str:
+    """Map OpenWeatherMap condition code to a display emoji."""
+    if 200 <= weather_id <= 232: return "⛈"
+    if 300 <= weather_id <= 321: return "🌦"
+    if 500 <= weather_id <= 531: return "🌧"
+    if 600 <= weather_id <= 622: return "❄️"
+    if 700 <= weather_id <= 781: return "🌫"
+    if weather_id == 800:        return "☀️"
+    if weather_id == 801:        return "🌤"
+    if weather_id == 802:        return "⛅"
+    if 803 <= weather_id <= 804: return "☁️"
+    return "🌡"
 
 
 # ---------------------------------------------------------------------------
@@ -180,11 +173,14 @@ def fetch_newsletters(senders: list[str], lookback_hours: float) -> list[dict]:
 # AI News summarization
 # ---------------------------------------------------------------------------
 
-def summarize_news(newsletters: list[dict]) -> str:
+def summarize_news(newsletters: list[dict]) -> tuple[str, str]:
     """
     Feed all newsletters to Claude at once.
-    Claude deduplicates overlapping stories and ranks by importance.
-    Returns formatted HTML-ready text.
+    Claude deduplicates stories and returns two sections:
+      - AI NEWS: top unique stories ranked by importance
+      - ARCHIVED: titles of duplicate/redundant stories
+
+    Returns (news_text, archived_text).
     """
     import anthropic
 
@@ -198,24 +194,40 @@ def summarize_news(newsletters: list[dict]) -> str:
         "Your job:\n"
         "1. Identify all unique AI news stories across all sources\n"
         "2. Merge duplicate coverage of the same story into one entry\n"
-        "3. Rank stories by importance and urgency (most impactful first)\n"
-        "4. Return the top 8 stories as a numbered list\n\n"
-        "Format each item exactly like this:\n"
-        "1. **Bold punchy headline (10 words max).** One sentence explaining why it matters.\n\n"
+        "3. Rank unique stories by importance (most impactful first)\n"
+        "4. List any redundant/duplicate stories separately\n\n"
+        "Format your response EXACTLY like this (keep both headers):\n\n"
+        "AI NEWS:\n"
+        "1. **Bold punchy headline (10 words max).** One sentence explaining why it matters.\n"
+        "(list top 8 unique stories)\n\n"
+        "ARCHIVED:\n"
+        "- Title of redundant story\n"
+        "(one per line — titles only, no descriptions)\n\n"
         "Rules:\n"
         "- Skip ads, job postings, and promotional content\n"
-        "- If multiple sources covered the same story, mention that (e.g. 'Covered by 3 sources')\n"
-        "- Return only the numbered list, no intro or conclusion\n\n"
+        "- If there are no archived stories, write 'ARCHIVED:\\nNone'\n"
+        "- Return only these two sections, no intro or conclusion\n\n"
         f"Newsletters:\n{combined[:10000]}"
     )
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     msg = client.messages.create(
         model=os.getenv("ANTHROPIC_MODEL_ID", "claude-haiku-4-5-20251001"),
-        max_tokens=800,
+        max_tokens=900,
         messages=[{"role": "user", "content": prompt}],
     )
-    return msg.content[0].text.strip()
+    raw = msg.content[0].text.strip()
+
+    # Split on the ARCHIVED header to get two sections
+    if "ARCHIVED:" in raw:
+        parts = raw.split("ARCHIVED:", 1)
+        news_part = parts[0].replace("AI NEWS:", "").strip()
+        archived_part = parts[1].strip()
+    else:
+        news_part = raw.replace("AI NEWS:", "").strip()
+        archived_part = ""
+
+    return news_part, archived_part
 
 
 # ---------------------------------------------------------------------------
@@ -242,16 +254,38 @@ def _news_lines_to_html(text: str) -> str:
     return f"<ol style='padding-left:20px;color:#333'>{items}</ol>" if items else ""
 
 
+def _archived_lines_to_html(text: str) -> str:
+    """Convert archived story titles into a compact bulleted list."""
+    if not text or text.strip().lower() == "none":
+        return ""
+    lines = [
+        l.strip().lstrip("- ").strip()
+        for l in text.strip().splitlines()
+        if l.strip() and l.strip().lower() != "none"
+    ]
+    if not lines:
+        return ""
+    items = "".join(f"<li style='color:#888;font-size:13px;margin-bottom:4px'>{l}</li>" for l in lines)
+    return f"<ul style='margin:0;padding-left:18px'>{items}</ul>"
+
+
 # ---------------------------------------------------------------------------
 # Email builder
 # ---------------------------------------------------------------------------
 
+def _section_header(title: str, color: str = "#1a1a1a", border: str = "#E8A838") -> str:
+    return (
+        f'<h2 style="font-size:17px;color:{color};border-bottom:2px solid {border};'
+        f'padding-bottom:6px;margin-top:32px;margin-bottom:16px">{title}</h2>'
+    )
+
+
 def build_email(
     tone: str,
     weather: dict,
-    weather_desc: str,
     alert: str | None,
     news_html: str = "",
+    archived_html: str = "",
 ) -> tuple[str, str]:
     now_ny = _get_ny_now()
     date_str = now_ny.strftime("%A, %B %-d")
@@ -265,41 +299,60 @@ def build_email(
         f'margin-bottom:20px;font-weight:bold;font-size:14px">{alert}</div>'
     ) if alert else ""
 
-    # Compact single-line weather stats (replaces the old 4-cell table)
-    stats_line = (
-        f"{weather['temp_f']:.0f}°F · feels like {weather['feels_like_f']:.0f}°F · "
-        f"{weather['description']} · {weather['wind_mph']:.0f} mph wind · {weather['humidity']}% humidity"
+    # Weather stat grid: 4 cells, no outer border, clean labels
+    w_emoji = _weather_emoji(weather["weather_id"])
+    stat_cell = (
+        'style="padding:10px 16px;text-align:center;border:1px solid #eee;border-radius:4px"'
     )
+    weather_grid = f"""
+    <p style="font-size:15px;margin:0 0 12px 0">{w_emoji} {weather['description'].title()}</p>
+    <table style="border-collapse:separate;border-spacing:6px;width:100%;margin-bottom:0">
+        <tr>
+            <td {stat_cell}>
+                <div style="font-size:22px;font-weight:bold">{weather['temp_f']:.0f}°F</div>
+                <div style="font-size:11px;color:#999;margin-top:2px">Temp</div>
+            </td>
+            <td {stat_cell}>
+                <div style="font-size:22px;font-weight:bold;color:#E8A838">{weather['feels_like_f']:.0f}°F</div>
+                <div style="font-size:11px;color:#999;margin-top:2px">Feels Like</div>
+            </td>
+            <td {stat_cell}>
+                <div style="font-size:22px;font-weight:bold">{weather['wind_mph']:.0f} mph</div>
+                <div style="font-size:11px;color:#999;margin-top:2px">Wind</div>
+            </td>
+            <td {stat_cell}>
+                <div style="font-size:22px;font-weight:bold">{weather['humidity']}%</div>
+                <div style="font-size:11px;color:#999;margin-top:2px">Humidity</div>
+            </td>
+        </tr>
+    </table>
+    """
 
-    # News section is only included in the evening email
+    # AI News section (evening only)
     news_section = ""
     if news_html:
-        news_section = f"""
-        <h2 style="font-size:17px;color:#1a1a1a;border-bottom:2px solid #4A90D9;padding-bottom:6px;margin-bottom:16px">
-            🗞 AI News — Today
-        </h2>
-        {news_html}
-        """
+        news_section = _section_header("AI News", border="#4A90D9") + news_html
+
+    # Archived section (only when there are redundant stories)
+    archived_section = ""
+    if archived_html:
+        archived_section = _section_header("Archived", color="#999", border="#ccc") + archived_html
 
     html = f"""
     <html><body style="font-family:Arial,sans-serif;max-width:660px;margin:auto;padding:24px;color:#222">
 
         {alert_html}
 
-        <!-- WEATHER SECTION -->
-        <div style="font-size:13px;color:#888;margin-bottom:16px">{date_str}</div>
+        <div style="font-size:13px;color:#888;margin-bottom:16px">{date_str} · {weather['city']}</div>
 
-        <p style="font-size:15px;line-height:1.7;background:#fafafa;padding:14px;
-                  border-left:4px solid #E8A838;border-radius:4px;margin-bottom:8px">
-            {weather_desc}
-        </p>
-
-        <p style="font-size:13px;color:#888;margin-bottom:32px">{stats_line}</p>
+        {_section_header("Weather")}
+        {weather_grid}
 
         {news_section}
+        {archived_section}
 
         <p style="font-size:11px;color:#bbb;margin-top:32px;border-top:1px solid #eee;padding-top:12px">
-            DailyEmail Bot • {weather['city']} • {label} Brief
+            DailyEmail Bot · {weather['city']} · {label} Brief
         </p>
     </body></html>
     """
@@ -358,22 +411,23 @@ def lambda_handler(event, context) -> dict:
     print("Fetching weather...")
     weather = get_weather()
     alert = detect_severe_weather(weather["weather_id"], weather["temp_f"], weather["wind_mph"])
-    weather_desc = get_weather_description(weather)
 
     # --- News (evening only — newsletters arrive 5am–4pm, all captured by 5:30pm) ---
     newsletters_fetched = 0
     news_html = ""
+    archived_html = ""
     if tone == "evening":
         lookback_hours = float(os.getenv("NEWS_LOOKBACK_HOURS", "24"))
         newsletters = fetch_newsletters(senders, lookback_hours)
         newsletters_fetched = len(newsletters)
         print(f"Fetched {newsletters_fetched} newsletters.")
         if newsletters:
-            news_text = summarize_news(newsletters)
+            news_text, archived_text = summarize_news(newsletters)
             news_html = _news_lines_to_html(news_text)
+            archived_html = _archived_lines_to_html(archived_text)
 
     # --- Build + send ---
-    subject, body = build_email(tone, weather, weather_desc, alert, news_html)
+    subject, body = build_email(tone, weather, alert, news_html, archived_html)
     send_email(subject, body)
     print(f"{tone.capitalize()} brief sent.")
 
