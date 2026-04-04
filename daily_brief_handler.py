@@ -64,36 +64,23 @@ def detect_severe_weather(weather_id: int, temp_f: float, wind_mph: float) -> st
     return None
 
 
-def get_weather_description(weather: dict, tone: str) -> str:
-    """Claude writes a human 'feels like' description in morning or evening tone."""
+def get_weather_description(weather: dict) -> str:
+    """Claude writes a single-sentence 'feels like' description."""
     import anthropic
 
-    prompts = {
-        "morning": (
-            "Write a 2-sentence weather briefing for someone starting their day. "
-            "Explain what it physically feels like outside — not just numbers. "
-            "Tell them what to wear. Be warm and conversational.\n\n"
-            f"City: {weather['city']} | {weather['temp_f']:.0f}°F, feels like "
-            f"{weather['feels_like_f']:.0f}°F | {weather['description']} | "
-            f"Humidity {weather['humidity']}% | Wind {weather['wind_mph']:.0f} mph\n\n"
-            "Exactly 2 sentences, no lists."
-        ),
-        "evening": (
-            "Write a 2-sentence weather briefing for someone heading home. "
-            "Focus on commute conditions and what to expect stepping outside. "
-            "Be warm and conversational.\n\n"
-            f"City: {weather['city']} | {weather['temp_f']:.0f}°F, feels like "
-            f"{weather['feels_like_f']:.0f}°F | {weather['description']} | "
-            f"Humidity {weather['humidity']}% | Wind {weather['wind_mph']:.0f} mph\n\n"
-            "Exactly 2 sentences, no lists."
-        ),
-    }
+    prompt = (
+        "Write exactly 1 sentence describing what it feels like outside and what to wear. "
+        "Be warm and conversational.\n\n"
+        f"City: {weather['city']} | {weather['temp_f']:.0f}°F, feels like "
+        f"{weather['feels_like_f']:.0f}°F | {weather['description']} | "
+        f"Humidity {weather['humidity']}% | Wind {weather['wind_mph']:.0f} mph"
+    )
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     msg = client.messages.create(
         model=os.getenv("ANTHROPIC_MODEL_ID", "claude-haiku-4-5-20251001"),
-        max_tokens=120,
-        messages=[{"role": "user", "content": prompts[tone]}],
+        max_tokens=60,
+        messages=[{"role": "user", "content": prompt}],
     )
     return msg.content[0].text.strip()
 
@@ -193,7 +180,7 @@ def fetch_newsletters(senders: list[str], lookback_hours: float) -> list[dict]:
 # AI News summarization
 # ---------------------------------------------------------------------------
 
-def summarize_morning_news(newsletters: list[dict]) -> str:
+def summarize_news(newsletters: list[dict]) -> str:
     """
     Feed all newsletters to Claude at once.
     Claude deduplicates overlapping stories and ranks by importance.
@@ -207,7 +194,7 @@ def summarize_morning_news(newsletters: list[dict]) -> str:
         combined += nl["text_content"][:3000]  # cap per newsletter
 
     prompt = (
-        "You are an AI news editor. Below are several AI newsletters from the past 24 hours.\n\n"
+        "You are an AI news editor. Below are AI newsletters from the past 24 hours.\n\n"
         "Your job:\n"
         "1. Identify all unique AI news stories across all sources\n"
         "2. Merge duplicate coverage of the same story into one entry\n"
@@ -231,97 +218,6 @@ def summarize_morning_news(newsletters: list[dict]) -> str:
     return msg.content[0].text.strip()
 
 
-def summarize_evening_news(newsletters: list[dict], morning_summary: str) -> tuple[str, str]:
-    """
-    Summarize afternoon newsletters, separating new stories from ones
-    already covered this morning.
-    Returns (new_stories_text, redundant_stories_text).
-    """
-    import anthropic
-
-    if not newsletters:
-        return "", ""
-
-    combined = ""
-    for nl in newsletters:
-        combined += f"\n\n=== SOURCE: {nl['sender']} | {nl['date']} ===\n"
-        combined += nl["text_content"][:3000]
-
-    prompt = (
-        "You are an AI news editor. Below are two sections:\n"
-        "1. MORNING DIGEST: stories already sent to the reader this morning\n"
-        "2. NEW NEWSLETTERS: newsletters that arrived after 9:30am today\n\n"
-        "Your job:\n"
-        "- Identify stories in the new newsletters that are NOT in the morning digest → NEW STORIES\n"
-        "- Identify stories that overlap with the morning digest → ALREADY COVERED\n\n"
-        "Format your response EXACTLY like this (keep the headers):\n\n"
-        "NEW STORIES:\n"
-        "1. **Bold headline.** One sentence on why it matters.\n"
-        "(list all new stories, ranked by importance)\n\n"
-        "ALREADY COVERED:\n"
-        "- Brief title of redundant story\n"
-        "(list redundant story titles only, one per line)\n\n"
-        "If there are no new stories, write 'NEW STORIES:\\nNone'\n"
-        "If there are no redundant stories, write 'ALREADY COVERED:\\nNone'\n\n"
-        f"MORNING DIGEST:\n{morning_summary}\n\n"
-        f"NEW NEWSLETTERS:\n{combined[:8000]}"
-    )
-
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    msg = client.messages.create(
-        model=os.getenv("ANTHROPIC_MODEL_ID", "claude-haiku-4-5-20251001"),
-        max_tokens=800,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw = msg.content[0].text.strip()
-
-    # Split on the ALREADY COVERED header
-    if "ALREADY COVERED:" in raw:
-        parts = raw.split("ALREADY COVERED:", 1)
-        new_part = parts[0].replace("NEW STORIES:", "").strip()
-        redundant_part = parts[1].strip()
-    else:
-        new_part = raw.replace("NEW STORIES:", "").strip()
-        redundant_part = ""
-
-    return new_part, redundant_part
-
-
-# ---------------------------------------------------------------------------
-# S3: store/load morning summary for evening dedup
-# ---------------------------------------------------------------------------
-
-def _s3_morning_key(date_str: str) -> str:
-    return f"morning_summary_{date_str}.txt"
-
-
-def load_morning_summary(bucket: str) -> str:
-    import boto3
-    from botocore.exceptions import ClientError
-
-    date_str = _get_ny_now().strftime("%Y-%m-%d")
-    s3 = boto3.client("s3")
-    try:
-        obj = s3.get_object(Bucket=bucket, Key=_s3_morning_key(date_str))
-        return obj["Body"].read().decode("utf-8")
-    except ClientError as e:
-        if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
-            return ""
-        raise
-
-
-def store_morning_summary(bucket: str, summary: str) -> None:
-    import boto3
-
-    date_str = _get_ny_now().strftime("%Y-%m-%d")
-    s3 = boto3.client("s3")
-    s3.put_object(
-        Bucket=bucket,
-        Key=_s3_morning_key(date_str),
-        Body=summary.encode("utf-8"),
-    )
-
-
 # ---------------------------------------------------------------------------
 # HTML helpers
 # ---------------------------------------------------------------------------
@@ -334,7 +230,7 @@ def _md_bold_to_html(text: str) -> str:
 def _news_lines_to_html(text: str) -> str:
     """Convert numbered list text into styled <ol> HTML."""
     if not text or text.strip().lower() == "none":
-        return "<p style='color:#888;font-style:italic'>No new stories in this window.</p>"
+        return "<p style='color:#888;font-style:italic'>No AI news today.</p>"
     lines = text.strip().splitlines()
     items = ""
     for line in lines:
@@ -346,23 +242,6 @@ def _news_lines_to_html(text: str) -> str:
     return f"<ol style='padding-left:20px;color:#333'>{items}</ol>" if items else ""
 
 
-def _redundant_lines_to_html(text: str) -> str:
-    """Convert the ALREADY COVERED bullet list into a compact archive section."""
-    if not text or text.strip().lower() == "none":
-        return ""
-    lines = [l.strip().lstrip("- ").strip() for l in text.strip().splitlines() if l.strip() and l.strip().lower() != "none"]
-    if not lines:
-        return ""
-    items = "".join(f"<li style='color:#888;font-size:13px'>{l}</li>" for l in lines)
-    return f"""
-    <div style="margin-top:24px;padding:14px;background:#f5f5f5;border-radius:4px;border-left:4px solid #ccc">
-        <div style="font-size:12px;font-weight:bold;color:#999;margin-bottom:8px">
-            📦 Already in Morning Brief
-        </div>
-        <ul style="margin:0;padding-left:18px">{items}</ul>
-    </div>"""
-
-
 # ---------------------------------------------------------------------------
 # Email builder
 # ---------------------------------------------------------------------------
@@ -372,14 +251,12 @@ def build_email(
     weather: dict,
     weather_desc: str,
     alert: str | None,
-    news_html: str,
-    redundant_html: str = "",
+    news_html: str = "",
 ) -> tuple[str, str]:
     now_ny = _get_ny_now()
     date_str = now_ny.strftime("%A, %B %-d")
     label = "Morning" if tone == "morning" else "Evening"
     emoji = "🌅" if tone == "morning" else "🌆"
-    news_label = "Last 24 Hours" if tone == "morning" else "Since 9:30am Today"
 
     subject = f"{emoji} {label} Brief — {weather['city']} — {date_str}"
 
@@ -388,50 +265,38 @@ def build_email(
         f'margin-bottom:20px;font-weight:bold;font-size:14px">{alert}</div>'
     ) if alert else ""
 
+    # Compact single-line weather stats (replaces the old 4-cell table)
+    stats_line = (
+        f"{weather['temp_f']:.0f}°F · feels like {weather['feels_like_f']:.0f}°F · "
+        f"{weather['description']} · {weather['wind_mph']:.0f} mph wind · {weather['humidity']}% humidity"
+    )
+
+    # News section is only included in the evening email
+    news_section = ""
+    if news_html:
+        news_section = f"""
+        <h2 style="font-size:17px;color:#1a1a1a;border-bottom:2px solid #4A90D9;padding-bottom:6px;margin-bottom:16px">
+            🗞 AI News — Today
+        </h2>
+        {news_html}
+        """
+
     html = f"""
     <html><body style="font-family:Arial,sans-serif;max-width:660px;margin:auto;padding:24px;color:#222">
 
         {alert_html}
 
         <!-- WEATHER SECTION -->
-        <h1 style="font-size:20px;color:#1a1a1a;border-bottom:3px solid #E8A838;padding-bottom:8px;margin-bottom:4px">
-            {emoji} {label} Brief — {weather['city']}
-        </h1>
         <div style="font-size:13px;color:#888;margin-bottom:16px">{date_str}</div>
 
         <p style="font-size:15px;line-height:1.7;background:#fafafa;padding:14px;
-                  border-left:4px solid #E8A838;border-radius:4px;margin-bottom:16px">
+                  border-left:4px solid #E8A838;border-radius:4px;margin-bottom:8px">
             {weather_desc}
         </p>
 
-        <table style="width:100%;border-collapse:collapse;margin-bottom:32px">
-            <tr>
-                <td style="padding:10px;text-align:center;border:1px solid #eee">
-                    <div style="font-size:11px;color:#888;text-transform:uppercase">Temp</div>
-                    <div style="font-size:24px;font-weight:bold">{weather['temp_f']:.0f}°F</div>
-                </td>
-                <td style="padding:10px;text-align:center;border:1px solid #eee">
-                    <div style="font-size:11px;color:#888;text-transform:uppercase">Feels Like</div>
-                    <div style="font-size:24px;font-weight:bold;color:#E8A838">{weather['feels_like_f']:.0f}°F</div>
-                </td>
-                <td style="padding:10px;text-align:center;border:1px solid #eee">
-                    <div style="font-size:11px;color:#888;text-transform:uppercase">Humidity</div>
-                    <div style="font-size:24px;font-weight:bold">{weather['humidity']}%</div>
-                </td>
-                <td style="padding:10px;text-align:center;border:1px solid #eee">
-                    <div style="font-size:11px;color:#888;text-transform:uppercase">Wind</div>
-                    <div style="font-size:24px;font-weight:bold">{weather['wind_mph']:.0f} mph</div>
-                </td>
-            </tr>
-        </table>
+        <p style="font-size:13px;color:#888;margin-bottom:32px">{stats_line}</p>
 
-        <!-- AI NEWS SECTION -->
-        <h2 style="font-size:17px;color:#1a1a1a;border-bottom:2px solid #4A90D9;padding-bottom:6px;margin-bottom:16px">
-            🗞 AI News — {news_label}
-        </h2>
-
-        {news_html}
-        {redundant_html}
+        {news_section}
 
         <p style="font-size:11px;color:#bbb;margin-top:32px;border-top:1px solid #eee;padding-top:12px">
             DailyEmail Bot • {weather['city']} • {label} Brief
@@ -476,7 +341,7 @@ def lambda_handler(event, context) -> dict:
         now_ny = _get_ny_now()
         h, m = now_ny.hour, now_ny.minute
 
-        # Gate: only run at 9:30am or 5:30pm New York time.
+        # Gate: only run at 9:30am (weather only) or 5:30pm (weather + news) New York time.
         # EventBridge fires at both EDT and EST UTC equivalents;
         # this check ensures only the correct one proceeds.
         if h == 9 and m == 30:
@@ -488,48 +353,27 @@ def lambda_handler(event, context) -> dict:
             return {"statusCode": 200, "body": json.dumps({"skipped": True, "ny_time": f"{h:02d}:{m:02d}"})}
 
     senders = [s.strip() for s in os.environ.get("NEWSLETTER_SENDERS", "").split(",") if s.strip()]
-    s3_bucket = os.getenv("NEWS_S3_BUCKET", "")
 
-    # --- Weather ---
+    # --- Weather (both sends) ---
     print("Fetching weather...")
     weather = get_weather()
     alert = detect_severe_weather(weather["weather_id"], weather["temp_f"], weather["wind_mph"])
-    weather_desc = get_weather_description(weather, tone)
+    weather_desc = get_weather_description(weather)
 
-    # --- News ---
-    if tone == "morning":
+    # --- News (evening only — newsletters arrive 5am–4pm, all captured by 5:30pm) ---
+    newsletters_fetched = 0
+    news_html = ""
+    if tone == "evening":
         lookback_hours = float(os.getenv("NEWS_LOOKBACK_HOURS", "24"))
         newsletters = fetch_newsletters(senders, lookback_hours)
-        print(f"Fetched {len(newsletters)} newsletters.")
-
+        newsletters_fetched = len(newsletters)
+        print(f"Fetched {newsletters_fetched} newsletters.")
         if newsletters:
-            news_text = summarize_morning_news(newsletters)
-            if s3_bucket:
-                store_morning_summary(s3_bucket, news_text)
-        else:
-            news_text = "None"
-
-        news_html = _news_lines_to_html(news_text)
-        redundant_html = ""
-
-    else:  # evening
-        # Lookback from 9:31am today to now (~8 hours)
-        today_931 = now_ny.replace(hour=9, minute=31, second=0, microsecond=0)
-        lookback_hours = (now_ny - today_931).total_seconds() / 3600
-        newsletters = fetch_newsletters(senders, lookback_hours)
-        print(f"Fetched {len(newsletters)} newsletters since 9:31am.")
-
-        morning_summary = load_morning_summary(s3_bucket) if s3_bucket else ""
-        if newsletters:
-            new_text, redundant_text = summarize_evening_news(newsletters, morning_summary)
-        else:
-            new_text, redundant_text = "", ""
-
-        news_html = _news_lines_to_html(new_text)
-        redundant_html = _redundant_lines_to_html(redundant_text)
+            news_text = summarize_news(newsletters)
+            news_html = _news_lines_to_html(news_text)
 
     # --- Build + send ---
-    subject, body = build_email(tone, weather, weather_desc, alert, news_html, redundant_html)
+    subject, body = build_email(tone, weather, weather_desc, alert, news_html)
     send_email(subject, body)
     print(f"{tone.capitalize()} brief sent.")
 
@@ -538,7 +382,7 @@ def lambda_handler(event, context) -> dict:
         "body": json.dumps({
             "tone": tone,
             "city": weather["city"],
-            "newsletters_fetched": len(newsletters) if senders else 0,
+            "newsletters_fetched": newsletters_fetched,
             "alert": alert,
             "sent": True,
         }),
